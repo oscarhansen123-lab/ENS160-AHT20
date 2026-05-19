@@ -5,144 +5,167 @@
 #include <ArduinoJson.h>
 #include <Wire.h>
 #include <ScioSense_ENS16x.h>
-#include <SparkFun_Qwiic_Humidity_AHT20.h> 
-
+#include <SparkFun_Qwiic_Humidity_AHT20.h>
+#include "esp_wifi.h"
+#include "esp_sleep.h"
 
 #define I2C_ADDRESS_ENS160 0x53
-AHT20 humiditySensor; // AHT20 sensor instance
-ENS160 ens16x; // ENS160 sensor instance
+AHT20 humiditySensor;
+ENS160 ens16x;
 
-const char* ssid = "RASPBERRYNET";
-const char* password = "VerySecret";
+const char* ssid = "WiFimodem-AC1E";
+const char* password = "etmlzgz4uw";
 
 const char* mqtt_server = "b512d33fcbc8401cb8504a21cce778a1.s1.eu.hivemq.cloud";
 const int mqtt_port = 8883;
 const char* mqtt_user = "AQreader";
 const char* mqtt_password = "Eksamen2026";
 
-WiFiClientSecure espClient; // WiFi client for MQTT (Secure)
-PubSubClient client(espClient); // MQTT client
-unsigned long lastMsg = 0; // Timestamp for the last MQTT message sent
-#define MSG_BUFFER_SIZE 256 // Buffer size for MQTT messages (increased for JSON)
-char msg[MSG_BUFFER_SIZE]; // Buffer for MQTT messages
+WiFiClientSecure espClient;
+PubSubClient client(espClient);
+#define MSG_BUFFER_SIZE 256
+char msg[MSG_BUFFER_SIZE];
+
+// ===== TID =====
+const uint32_t MEASURE_INTERVAL_SEC = 120;
+const uint32_t SEND_INTERVAL_SEC    = 600;
+const uint32_t ENS160_STAB_MS       = 30000;
+const uint32_t BOOT_ACTIVE_MS       = 40000;
+const uint32_t MQTT_HOLD_MS         = 20000; // NEW: hold 20 sek efter publish
+
+// ===== RTC =====
+RTC_DATA_ATTR uint32_t secondsAccumulated = 0;
+RTC_DATA_ATTR bool firstBootDone = false;
+RTC_DATA_ATTR uint32_t activeAccumulatedSec = 0;
+RTC_DATA_ATTR uint32_t lastSleepSec = 0;
+
+
+RTC_DATA_ATTR float lastT = 0;
+RTC_DATA_ATTR float lastH = 0;
+RTC_DATA_ATTR uint8_t lastAqi = 0;
+RTC_DATA_ATTR uint16_t lastTvoc = 0;
+RTC_DATA_ATTR uint16_t lastEco2 = 0;
 
 void wifi_setup() {
-    delay(10);
-    Serial.println();
-    Serial.print("Connecting to ");
-    Serial.println(ssid);
-
+    WiFi.mode(WIFI_STA);
+    WiFi.setSleep(true);
     WiFi.begin(ssid, password);
 
-    while (WiFi.status() != WL_CONNECTED) {
+    unsigned long startAttempt = millis();
+    while (WiFi.status() != WL_CONNECTED && (millis() - startAttempt < 15000)) {
         delay(500);
-        Serial.print(".");
-    }
-
-    Serial.println("");
-    Serial.println("WiFi connected");
-    Serial.println("IP address: ");
-    Serial.println(WiFi.localIP());
-}
-
-void reconnect() {
-    while (!client.connected()) {
-        Serial.print("Attempting MQTT connection...");
-        if (client.connect("ESP32Client", mqtt_user, mqtt_password)) {
-            Serial.println("connected");
-        } else {
-            Serial.print("failed, rc=");
-            Serial.print(client.state());
-            Serial.println(" try again in 5 seconds");
-            delay(5000);
-        }
     }
 }
 
+void wifi_off() {
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    esp_wifi_stop();
+}
 
+void mqtt_setup() {
+    espClient.setInsecure();
+    client.setServer(mqtt_server, mqtt_port);
+}
 
+bool mqtt_connect() {
+    if (!client.connected()) {
+        return client.connect("ESP32Client", mqtt_user, mqtt_password);
+    }
+    return true;
+}
+
+void goDeepSleep(uint32_t seconds) {
+    esp_sleep_enable_timer_wakeup((uint64_t)seconds * 1000000ULL);
+    esp_deep_sleep_start();
+}
 
 void setup() {
-    
-    delay(2000);
     Serial.begin(115200);
-    wifi_setup(); // Connect to WiFi 
-    
-    // For HiveMQ Cloud, skip certificate verification (or add your CA certificate)
-    espClient.setInsecure(); // Skip certificate verification
-    
-    client.setServer(mqtt_server, mqtt_port); // Set MQTT server and port
+    delay(200);
 
-    // Initialize I2C communication on pins 8 (SDA) and 9 (SCL)
-    Wire.begin(8, 9); 
-    
-    Serial.println("\n--- Initialiserer sensorer ---");
+    uint32_t awakeStart = millis();
 
-   // Initialize AHT20 sensor 
-    if (humiditySensor.begin() == false) {
-        Serial.println("AHT20 ikke fundet!");
-    } else {
-        Serial.println("AHT20 OK");
+    if (!firstBootDone) {
+        Serial.println("Boot vindue 40 sek (upload kode nu)...");
+        delay(BOOT_ACTIVE_MS);
+        firstBootDone = true;
     }
 
-    // Initialize ENS160 sensor
-    ens16x.enableDebugging(Serial);
+    // === mål hver wake ===
+    secondsAccumulated += lastSleepSec;
+
+    mqtt_setup();
+    Wire.begin(8, 9);
+
+    humiditySensor.begin();
     ens16x.begin(&Wire, I2C_ADDRESS_ENS160);
-
-    Serial.print("Venter på ENS160...");
-    while (ens16x.init() != true) {
-        Serial.print(".");
-        delay(1000);
-    }
-    Serial.println("\nENS160 success!");
-
+    while (ens16x.init() != true) delay(500);
     ens16x.startStandardMeasure();
-}
 
-void loop() {
-    float t = 25.0; // Default temperature value in case sensor reading fails
-    float h = 50.0; // Default humidity value in case sensor reading fails
-    if (!client.connected()) {
-        reconnect(); // Reconnect to MQTT if connection is lost
+    delay(ENS160_STAB_MS);
+
+    lastT = humiditySensor.getTemperature();
+    lastH = humiditySensor.getHumidity();
+    if (ens16x.update() == RESULT_OK && ens16x.hasNewData()) {
+        lastAqi = (uint8_t)ens16x.getAirQualityIndex_UBA();
+        lastTvoc = ens16x.getTvoc();
+        lastEco2 = ens16x.getEco2();
     }
-    client.loop(); // Handle MQTT communication
 
-    // Read temperature and humidity from AHT20 sensor
-    t = humiditySensor.getTemperature();
-    h = humiditySensor.getHumidity();
+        // >>> START: beregn samlet forløbet tid (sleep + aktiv)
+    uint32_t awakeSecSoFar = (millis() - awakeStart) / 1000;
+    uint32_t totalElapsedSec = secondsAccumulated + activeAccumulatedSec + awakeSecSoFar;
+    // <<< END: beregn samlet forløbet tid
 
-    // Print temperature and humidity values to Serial
-    Serial.print("T: "); Serial.print(t, 1);
-    Serial.print("C | H: "); Serial.print(h, 1);
-    Serial.print("% | ");
+    // ===== SEND når der er gået 10 min =====
+    bool sendOk = false;
+    if (secondsAccumulated >= SEND_INTERVAL_SEC) {
+        wifi_setup();
 
+        if (WiFi.status() == WL_CONNECTED) {
+            if (mqtt_connect()) {
+                JsonDocument doc;
+                doc["temperature"] = lastT;
+                doc["humidity"] = lastH;
+                doc["aqi"] = lastAqi;
+                doc["tvoc"] = lastTvoc;
+                doc["eco2"] = lastEco2;
 
-    // Update ENS160 sensor and print air quality data if new data is available
-    if (ens16x.update() == RESULT_OK) {
-        if (ens16x.hasNewData()) {
-            Serial.print("AQI: "); Serial.print((uint8_t)ens16x.getAirQualityIndex_UBA());
-            Serial.print("\tTVOC: "); Serial.print(ens16x.getTvoc()); Serial.print("ppb");
-            Serial.print("\tECO2: "); Serial.print(ens16x.getEco2()); Serial.println("ppm");
+                serializeJson(doc, msg);
+                client.publish("sensor/data", msg);
+                sendOk = true;
+
+                // NEW: hold forbindelsen åben 20 sek for leverance
+                unsigned long holdStart = millis();
+                while (millis() - holdStart < MQTT_HOLD_MS) {
+                    client.loop();
+                    delay(50);
+                }
+            }
+        }
+
+        wifi_off();
+
+        if (sendOk) {
+            secondsAccumulated = 0;
         }
     }
 
-    unsigned long now = millis();
-    if (now - lastMsg > 300000) { // Send MQTT message every 60 seconds
-        lastMsg = now;
-        // Create JSON object for MQTT message
-        JsonDocument doc; 
-        doc["temperature"] = t = humiditySensor.getTemperature();
-        doc["humidity"] = h = humiditySensor.getHumidity();
-        doc["aqi"] = (uint8_t)ens16x.getAirQualityIndex_UBA();
-        doc["tvoc"] = ens16x.getTvoc();
-        doc["eco2"] = ens16x.getEco2();
+        // >>> START: opdater aktiv tid for hele wake
+    uint32_t awakeSecTotal = (millis() - awakeStart) / 1000;
+    activeAccumulatedSec += awakeSecTotal;
+    // <<< END: opdater aktiv tid
 
-        serializeJson(doc, msg); // Serialize JSON object to string
+    uint32_t remainingToSend = (secondsAccumulated >= SEND_INTERVAL_SEC)
+        ? MEASURE_INTERVAL_SEC
+        : (SEND_INTERVAL_SEC - secondsAccumulated);
 
-        Serial.print("Publishing message: ");
-        Serial.println(msg);
-        client.publish("sensor/data", msg); // Publish temperature and humidity data to MQTT
-    }
+    uint32_t sleepTime = min(MEASURE_INTERVAL_SEC, remainingToSend);
 
-    delay(60000);
+    lastSleepSec = sleepTime;
+
+    goDeepSleep(sleepTime);
 }
+
+void loop() {}
