@@ -13,8 +13,8 @@
 AHT20 humiditySensor;
 ENS160 ens16x;
 
-const char* ssid = "WiFimodem-AC1E";
-const char* password = "etmlzgz4uw";
+const char* ssid = "xx";
+const char* password = "";
 
 const char* mqtt_server = "b512d33fcbc8401cb8504a21cce778a1.s1.eu.hivemq.cloud";
 const int mqtt_port = 8883;
