@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+    <meta charset="UTF-8">
+    <title>Luftkvalitetsmålinger</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: Arial;
+            background: #b6b3b3;
+            margin: 0;
+            padding: 20px;
+        }
+        h1, h2 {
+            text-align: center;
+        }
+        .container {
+            max-width: 1100px;
+            margin: auto;
+        }
+        .card {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 25px;
+        }
+        canvas {
+            width: 100%;
+        }
+        .AQIbillede {
+            display: block;
+            margin: 20px auto;
+            max-width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <h1>Luftkvalitetsmålinger - Seneste 30 dage</h1>
+    <div class = "container">
+        <div class="card">
+            <h2>Kombinerede målinger</h2>
+            <canvas id="KombineretGraf"></canvas>
+        </div>
+        <div class="card">
+            <h2>Temperatur i celsius</h2>
+            <canvas id="TemperaturGraf"></canvas>
+        </div>
+        <div class="card">
+            <h2>Fugtighed i procent</h2>
+            <canvas id="FugtighedGraf"></canvas>
+        </div>
+        <div class="card">
+            <h2>luftkvalitetsindex</h2>
+            <canvas id="LuftkvalitetsindexGraf"></canvas>
+        </div>
+        <div class="card">
+            <h2>TVOC-målinger i ppb</h2>
+            <canvas id="TVOCGraf"></canvas>
+        </div>
+        <div class="card">
+            <h2>eCO2-målinger i ppm</h2>
+            <canvas id="eCO2Graf"></canvas>
+        </div>
+    </div>
+    <h2>luftkvalitetsindex er lavet ud fra dette:</h2>
+    <img class="AQIbillede" src="AQI.png" alt="billede af hvad de forskellige luftkvalitetsindex betyder">
+    <h2>(ppb/1000=ppm)</h2>
+
+<script>
+    let charts = [];
+
+    async function loadData() {
+        const res = await fetch('/data');
+        const data = await res.json();
+        
+        // filtrer seneste 30 dage
+        const now = new Date();
+        const cutoff = new Date();
+        cutoff.setDate(now.getDate() - 30);
+        
+        const filtered = data.filter(d=> new Date(d.timestamp) >= cutoff);
+      
+
+        filtered.reverse(); // Vis data i kronologisk rækkefølge
+        const labels = filtered.map(d => new Date(d.timestamp).toLocaleString());
+
+        const temp = filtered.map(d => d.temperature);
+        const humidity = filtered.map(d => d.humidity);
+        const aqi = filtered.map(d => d.aqi);
+        const tvoc = filtered.map(d => d.tvoc);
+        const eco2 = filtered.map(d => d.eco2);
+
+        charts.forEach(chart => chart.destroy()); // Ødelæg eksisterende grafer
+        charts = [];
+
+        charts.push(new Chart(document.getElementById('KombineretGraf'), {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [
+                    { label: 'Temperatur (°C)', data: temp, borderColor: 'red', fill: false },
+                    { label: 'Fugtighed (%)', data: humidity, borderColor: 'blue', fill: false },
+                    { label: 'Luftkvalitetsindex', data: aqi, borderColor: 'green', fill: false },
+                    { label: 'TVOC (ppb)', data: tvoc, borderColor: 'orange', fill: false },
+                    { label: 'eCO2 (ppm)', data: eco2, borderColor: 'purple', fill: false }
+                ]
+            },
+            options: chartOptions("Alle datatyper")
+            
+        }));
+        charts.push(creatingSingleChart('TemperaturGraf', labels, temp, 'Temperatur (°C)', 'red'));
+        charts.push(creatingSingleChart('FugtighedGraf', labels, humidity, 'Fugtighed (%)', 'blue'));
+        charts.push(creatingSingleChart('LuftkvalitetsindexGraf', labels, aqi, 'Luftkvalitetsindex', 'green'));
+        charts.push(creatingSingleChart('TVOCGraf', labels, tvoc, 'TVOC (ppb)', 'orange'));
+        charts.push(creatingSingleChart('eCO2Graf', labels, eco2, 'eCO2 (ppm)', 'purple'));
+    }
+    function creatingSingleChart(elementId, labels, data, label, color) {
+        return new Chart(document.getElementById(elementId), {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [{ label, data, borderColor: color, fill: false, tension: 0.3 }]
+            },
+            options: chartOptions(label)
+        });
+    }
+
+    function chartOptions(title) {
+        return {
+            responsive: true,
+            interaction: {
+                mode: 'index',
+                intersect: false
+            },
+            plugins: {
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            return context.dataset.label + ': ' + context.raw;
+                        }
+                    }
+                },
+                legend: {
+                    display: true,
+                }
+            },
+            scales: {
+                x: {
+                    display: true,
+                    title: {
+                        display: true,
+                        text: 'Dato og tid'
+                    }
+                },
+                y: {
+                    display: true,
+                    title: {
+                        display: true,
+                        text: title
+                    }
+                }
+            }
+    };
+}
+
+setInterval(loadData, 600000); 
+loadData(); 
+</script>
+</body>
+</html>
