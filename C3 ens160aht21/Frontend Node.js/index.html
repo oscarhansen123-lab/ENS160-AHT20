@@ -69,11 +69,12 @@
 <script>
     let charts = [];
 
+    // Function to load data from the backend and update charts
     async function loadData() {
         const res = await fetch('/data');
         const data = await res.json();
         
-        // filtrer seneste 30 dage
+        // Filter data to only include the last 30 days
         const now = new Date();
         const cutoff = new Date();
         cutoff.setDate(now.getDate() - 30);
@@ -81,7 +82,7 @@
         const filtered = data.filter(d=> new Date(d.timestamp) >= cutoff);
       
 
-        filtered.reverse(); // Vis data i kronologisk rækkefølge
+        filtered.reverse(); // show oldest data first
         const labels = filtered.map(d => new Date(d.timestamp).toLocaleString());
 
         const temp = filtered.map(d => d.temperature);
@@ -90,9 +91,10 @@
         const tvoc = filtered.map(d => d.tvoc);
         const eco2 = filtered.map(d => d.eco2);
 
-        charts.forEach(chart => chart.destroy()); // Ødelæg eksisterende grafer
+        charts.forEach(chart => chart.destroy()); // destroy existing charts before creating new ones
         charts = [];
 
+        // Create combined chart
         charts.push(new Chart(document.getElementById('KombineretGraf'), {
             type: 'line',
             data: {
@@ -108,14 +110,16 @@
             options: chartOptions("Alle datatyper")
             
         }));
+        // Create individual charts
         charts.push(creatingSingleChart('TemperaturGraf', labels, temp, 'Temperatur (°C)', 'red'));
         charts.push(creatingSingleChart('FugtighedGraf', labels, humidity, 'Fugtighed (%)', 'blue'));
         charts.push(creatingSingleChart('LuftkvalitetsindexGraf', labels, aqi, 'Luftkvalitetsindex', 'green'));
         charts.push(creatingSingleChart('TVOCGraf', labels, tvoc, 'TVOC (ppb)', 'orange'));
         charts.push(creatingSingleChart('eCO2Graf', labels, eco2, 'eCO2 (ppm)', 'purple'));
     }
-    function creatingSingleChart(elementId, labels, data, label, color) {
-        return new Chart(document.getElementById(elementId), {
+    // Helper function to create individual charts
+    function creatingSingleChart(elementId, labels, data, label, color) { 
+        return new Chart(document.getElementById(elementId), { 
             type: 'line',
             data: {
                 labels,
@@ -124,7 +128,7 @@
             options: chartOptions(label)
         });
     }
-
+    // Helper function to create chart options
     function chartOptions(title) {
         return {
             responsive: true,
@@ -136,7 +140,7 @@
                 tooltip: {
                     callbacks: {
                         label: function(context) {
-                            return context.dataset.label + ': ' + context.raw;
+                            return context.dataset.label + ': ' + context.raw; 
                         }
                     }
                 },

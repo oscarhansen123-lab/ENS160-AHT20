@@ -23,6 +23,7 @@ const client = mqtt.connect('mqtts://b512d33fcbc8401cb8504a21cce778a1.s1.eu.hive
     password: 'Eksamen2026'  // Replace with your MQTT password
 });
 
+// Handle MQTT connection and messages
 client.on('connect', () => {
     console.log('Connected to MQTT broker');
     client.subscribe('sensor/data', (err) => {
@@ -32,6 +33,7 @@ client.on('connect', () => {
         });
     });
 
+// Handle incoming MQTT messages
 client.on('message', (topic, message) => {
     try {
         console.log('Received message:', message.toString());
@@ -53,7 +55,7 @@ client.on('message', (topic, message) => {
             return;
         }
         
-        
+        // Insert data into the database
         db.run(`INSERT INTO mqtt_data (temperature, humidity, aqi, tvoc, eco2) VALUES (?, ?, ?, ?, ?)`,
             [temperature, humidity, aqi, tvoc, eco2],
                 function (err) {
@@ -69,6 +71,7 @@ client.on('message', (topic, message) => {
     }
 });
 
+// API endpoint to retrieve data
 app.get('/data', (req, res) => {
     db.all('SELECT * FROM mqtt_data ORDER BY timestamp DESC', [], (err, rows) => {
         if (err) {
@@ -80,8 +83,10 @@ app.get('/data', (req, res) => {
     });
 });
 
+// Serve static files from the 'public' directory
 app.use(express.static(path.join(__dirname,'public')));
 
+// Start the server
 app.listen(3000, () => {
     console.log('Server is running on http://localhost:3000');
 });
