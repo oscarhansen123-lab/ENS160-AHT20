@@ -26,7 +26,7 @@ PubSubClient client(espClient);
 #define MSG_BUFFER_SIZE 256
 char msg[MSG_BUFFER_SIZE];
 
-// ===== TID =====
+// ===== TIME INTERVALS =====
 const uint32_t MEASURE_INTERVAL_SEC = 120;
 const uint32_t SEND_INTERVAL_SEC    = 600;
 const uint32_t ENS160_STAB_MS       = 30000;
@@ -46,6 +46,7 @@ RTC_DATA_ATTR uint8_t lastAqi = 0;
 RTC_DATA_ATTR uint16_t lastTvoc = 0;
 RTC_DATA_ATTR uint16_t lastEco2 = 0;
 
+// WiFi helper functions
 void wifi_setup() {
     WiFi.mode(WIFI_STA);
     WiFi.setSleep(true);
@@ -63,6 +64,7 @@ void wifi_off() {
     esp_wifi_stop();
 }
 
+// MQTT helper functions
 void mqtt_setup() {
     espClient.setInsecure();
     client.setServer(mqtt_server, mqtt_port);
@@ -75,6 +77,7 @@ bool mqtt_connect() {
     return true;
 }
 
+// Deep sleep helper function
 void goDeepSleep(uint32_t seconds) {
     esp_sleep_enable_timer_wakeup((uint64_t)seconds * 1000000ULL);
     esp_deep_sleep_start();
@@ -83,28 +86,31 @@ void goDeepSleep(uint32_t seconds) {
 void setup() {
     Serial.begin(115200);
     delay(200);
-
+    // Track the start time of the current awake period
     uint32_t awakeStart = millis();
 
+    // First boot handling for new code upload
     if (!firstBootDone) {
         Serial.println("Boot vindue 40 sek (upload kode nu)...");
         delay(BOOT_ACTIVE_MS);
         firstBootDone = true;
     }
 
-    // === mål hver wake ===
+    // Measure every wake
     secondsAccumulated += lastSleepSec;
 
+    // Setup MQTT and I2C
     mqtt_setup();
     Wire.begin(8, 9);
 
+    // Start measurements
     humiditySensor.begin();
     ens16x.begin(&Wire, I2C_ADDRESS_ENS160);
     while (ens16x.init() != true) delay(500);
     ens16x.startStandardMeasure();
-
+    // Wait for ENS160 to stabilize before reading data
     delay(ENS160_STAB_MS);
-
+    // Read sensor data
     lastT = humiditySensor.getTemperature();
     lastH = humiditySensor.getHumidity();
     if (ens16x.update() == RESULT_OK && ens16x.hasNewData()) {
@@ -113,16 +119,17 @@ void setup() {
         lastEco2 = ens16x.getEco2();
     }
 
-        // >>> START: beregn samlet forløbet tid (sleep + aktiv)
+    // Check if it's time to send data (over 10 minutes since last send)
     uint32_t awakeSecSoFar = (millis() - awakeStart) / 1000;
     uint32_t totalElapsedSec = secondsAccumulated + activeAccumulatedSec + awakeSecSoFar;
-    // <<< END: beregn samlet forløbet tid
 
-    // ===== SEND når der er gået 10 min =====
+
+    // sends when over 10 minutes since last send, then resets the accumulated active time
     bool sendOk = false;
     if (secondsAccumulated >= SEND_INTERVAL_SEC) {
         wifi_setup();
 
+        // Only attempt to connect to MQTT and send data if we successfully connected to WiFi
         if (WiFi.status() == WL_CONNECTED) {
             if (mqtt_connect()) {
                 JsonDocument doc;
@@ -136,7 +143,7 @@ void setup() {
                 client.publish("sensor/data", msg);
                 sendOk = true;
 
-                // NEW: hold forbindelsen åben 20 sek for leverance
+                // holds for a while after sending to ensure the message is sent before disconnecting WiFi
                 unsigned long holdStart = millis();
                 while (millis() - holdStart < MQTT_HOLD_MS) {
                     client.loop();
@@ -152,10 +159,14 @@ void setup() {
         }
     }
 
-        // >>> START: opdater aktiv tid for hele wake
+    /* 
+    mistake in duty cycle calculation: we should add the current awake time to the accumulated active time 
+    before calculating the sleep time, since we're going to sleep now and won't have a chance to add the current awake time in the next cycle 
+    until we wake up again
+    */ 
     uint32_t awakeSecTotal = (millis() - awakeStart) / 1000;
     activeAccumulatedSec += awakeSecTotal;
-    // <<< END: opdater aktiv tid
+  
 
     uint32_t remainingToSend = (secondsAccumulated >= SEND_INTERVAL_SEC)
         ? MEASURE_INTERVAL_SEC
