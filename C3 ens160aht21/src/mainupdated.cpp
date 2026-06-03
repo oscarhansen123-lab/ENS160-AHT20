@@ -13,8 +13,8 @@
 AHT20 humiditySensor;
 ENS160 ens16x;
 
-const char* ssid = "";
-const char* password = "";
+const char* ssid = "RASPBERRYNET";
+const char* password = "VerySecret";
 
 const char* mqtt_server = "b512d33fcbc8401cb8504a21cce778a1.s1.eu.hivemq.cloud";
 const int mqtt_port = 8883;
@@ -164,6 +164,9 @@ void setup() {
     uint32_t awakeSecTotal = (millis() - awakeStart) / 1000; // total awake time for this cycle (including the current active time)
     activeAccumulatedSec += awakeSecTotal; // add the total awake time for this cycle to the accumulated active time
 
+    // Recalculate total elapsed time with the updated active accumulated time
+    totalElapsedSec = secondsAccumulated + activeAccumulatedSec;
+
    // Calculate how much time is left until we reach the next send interval, and sleep for the smaller of that time or the measure interval
     uint32_t remainingToSend;
 if (totalElapsedSec >= SEND_INTERVAL_SEC) {
@@ -177,9 +180,6 @@ if (totalElapsedSec >= SEND_INTERVAL_SEC) {
     }
 }
 uint32_t sleepTime = min(MEASURE_INTERVAL_SEC, remainingToSend);
-
-uint32_t awakeMs = millis() - awakeStart;
-uint32_t awakeSecTotal = (awakeMs + 999) / 1000; // sleep for the smaller of the measure interval or the remaining time until the next send interval
 
     lastSleepSec = sleepTime; // save the sleep time for the next cycle
     goDeepSleep(sleepTime);
